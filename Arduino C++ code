@@ -1,1 +1,750 @@
-insert code here...
+/*
+6X6 MAZE SOLVER USING THE A* ALGORITHM
+
+Wilson Ortiz-Lopez
+ME 556 Robotic Concepts
+
+*/
+
+//initialization of parameters and structures needed for the 
+//algorithm, robot, and maze
+
+//construct contants for the maze parameters
+const int ROWS = 6;
+const int COLS = 6;
+const int MAX_NODES = ROWS*COLS;
+
+//initaliaze the 2D maze with defined lengths
+int maze[ROWS][COLS];
+
+//initialize the start and end goal coordinates
+int start_row = 5;
+int start_col = 0;
+int end_row = 0;
+int end_col = 5;
+
+//variable to hold the heading of the robot. this is needed to perform
+//proper selection of cell that is available/not available to the robot
+//north = 0, east = 1, south = 2, west = 3
+int heading = 0;
+
+//Creating structure to hold the variables that make up a node in the maze
+struct Node {
+  int r,c;    //row and column # of each node
+  int g,h,f;  //g(cost to go), h(heuristic or distance to goal), f(the cost to go
+              //plus the heuristic)
+  int parent; //the parent node attached to "this" node
+  int open;   //states if the node is in the open array of nodes
+  int closed; //states if the node is in the closed for searching
+};
+
+//creating instance of Node called nodes 
+Node nodes[MAX_NODES];
+
+//initializing an array for the open node locations
+int openArray[MAX_NODES];
+int openCount = 0;
+
+//sensor capture functions, created booleans of when each of the sensor
+//directions sees a wall
+bool wallFront()
+{
+  if (digitalRead(10) == 0) //zero(low) means there is a wall
+    return true;
+  else
+  return false;
+}
+
+bool wallLeft()
+{
+  if (digitalRead(8) == 0)
+    return true;
+  else
+  return false;
+}
+
+bool wallRight()
+{
+  if (digitalRead(11) == 0)
+    return true;
+  else
+  return false;
+}
+
+//robot motor movement functions
+void forward()
+{
+  digitalWrite(2, HIGH);  //EN PIN LM
+  digitalWrite(3, LOW);   //PIN1 LM
+  digitalWrite(4, HIGH);  //PIN2 LM
+
+  digitalWrite(5, HIGH);  //EN PIN RM
+  digitalWrite(7, LOW);   //PIN4 RM
+  digitalWrite(6, HIGH);  //PIN3 RM 
+}
+
+void stopMove() {
+  digitalWrite(2, LOW); //LM
+  digitalWrite(3, LOW);
+  digitalWrite(4, LOW);
+
+  digitalWrite(5, LOW); //RM
+  digitalWrite(6, LOW);
+  digitalWrite(7, LOW);
+}
+
+void leftTurn()
+{
+  digitalWrite(2, HIGH);  //MAKE LM GO REV
+  digitalWrite(3, HIGH); 
+  digitalWrite(4, LOW);
+
+  digitalWrite(5, HIGH);  //MAKE RM GO FWD
+  digitalWrite(7, LOW);
+  digitalWrite(6, HIGH);
+}
+
+void rightTurn()
+{
+  digitalWrite(2, HIGH); //MAKE LM GO FWD
+  digitalWrite(3, LOW);
+  digitalWrite(4, HIGH);
+
+  digitalWrite(5, HIGH);  //MAKE RM GO REV
+  digitalWrite(7, HIGH);
+  digitalWrite(6, LOW);
+}
+
+void halfSpin()
+{
+  digitalWrite(2, HIGH);
+  digitalWrite(4, HIGH);
+  digitalWrite(3, LOW);
+  digitalWrite(5, HIGH);
+  digitalWrite(7, HIGH);
+  digitalWrite(6, LOW);
+  digitalWrite(13, HIGH);
+}
+
+//code to align the mouse while moving forward
+void straighten() {
+
+  if (digitalRead(10) == 1) {
+
+    if(digitalRead(9) == 0 && digitalRead(12) == 1) {
+      rightTurn();
+      delay(5);
+      stopMove();
+      delay(10);
+    }
+    if(digitalRead(9) == 1 && digitalRead(12) == 0) {
+      leftTurn();
+      delay(5);
+      stopMove();
+      delay(10);
+    }
+  }
+
+}
+
+//usefull functions to use within the algorithm...
+
+//a function takes the given row and col and returns an integer
+//that equals the location of the maze when it is made into 1-D array
+int arrayIndex(int r, int c)
+{
+  return r*COLS + c;
+}
+
+//a function takes a given row and col and returns true or false
+//depending on whether that row and col are within the bounds of the maze
+bool bounds(int r, int c)
+{
+  return r >= 0 && r < ROWS && c >= 0 && c < COLS;
+}
+
+//a function that returns true if the node is free or if the node is the goal and returns
+//false if the node being checked is outside the bounds of the maze
+bool canContinue(int r, int c)
+{
+  if (!bounds(r, c))
+    return false;
+
+  if (r == end_row && c == end_col)
+    return true;
+
+  return maze[r][c] == 1;
+}
+
+//this function will provde the correct heading to be implmented in the following
+//function for exploration. this will update the next node to explore depending on
+//the current heading state of the robot.
+void headingDirections(int heading, int dr[4], int dc[4])
+{
+  //the direction row and columns are adjusted for each cell starting 
+  //from the following order: [front], [right], [left], [back]
+  if (heading == 0) 
+  { // North
+    dr[0]=-1; dc[0]=0;
+    dr[1]=0;  dc[1]=1;
+    dr[2]=0;  dc[2]=-1;
+    dr[3]=1;  dc[3]=0;
+  }
+  else if (heading == 1) 
+  { // East
+    dr[0]=0;  dc[0]=1;
+    dr[1]=1;  dc[1]=0;
+    dr[2]=-1; dc[2]=0;
+    dr[3]=0;  dc[3]=-1;
+  }
+  else if (heading == 2) 
+  { // South
+    dr[0]=1;  dc[0]=0;
+    dr[1]=0;  dc[1]=-1;
+    dr[2]=0;  dc[2]=1;
+    dr[3]=-1; dc[3]=0;
+  }
+  else 
+  { // West
+    dr[0]=0;  dc[0]=-1;
+    dr[1]=-1; dc[1]=0;
+    dr[2]=1;  dc[2]=0;
+    dr[3]=0;  dc[3]=1;
+  }
+}
+
+//this function takes in a node that is known to be free and will move the robot in
+//the proper direction. this moves the robot to unexplored free spaces in the maze
+bool exploreNeighbor(int r, int c, int &r_next, int &c_next)
+{
+  const int dr[4] = {-1, 0, 1, 0};
+  const int dc[4] = {0, 1, 0, -1};
+
+  for (int i = 0; i < 4; i++)
+  {
+    int nr = r + dr[i];
+    int nc = c + dc[i];
+
+    if (bounds(nr, nc) && maze[nr][nc] == 1)
+    {
+      r_next = nr;
+      c_next = nc;
+      return true;
+    }
+  }
+  return false;
+}
+ 
+//mahattan heuristic used to estimate path cost in the maze
+//between two distinct nodes
+int heuristic (int r1, int c1, int r2, int c2)
+{
+  return abs(r1-r2) + abs(c1-c2);
+}
+
+//send an index and if its not found in the current node list where open is false,
+//add this index to openArray and set the open parameter of the this
+//nodes as being true (its in the open nodes array)
+void addOpens(int i)
+{
+  if (!nodes[i].open)
+  {
+    //debug
+    Serial.print("Add open : (");
+    Serial.print(nodes[i].r);
+    Serial.print(", ");
+    Serial.print(nodes[i].c);
+    Serial.println(")"); 
+    delay(100);
+    //
+    openArray[openCount++] = i;
+    nodes[i].open = true;
+  }
+}
+
+//function to be used in the A* search. it will be used to check the next best
+//node to explore based on the lowest F value 
+int findLowestF()
+{
+  //return -1 for the first node (start)
+  if (openCount == 0)
+    return -1;
+
+  int bestIndex = 0;
+  int best = openArray[0];
+
+  //loop through the list of open nodes
+  for(int i = 1; i < openCount; i++)
+  {
+    int j = openArray[i];
+    //check f value of each index and compare it to the best node starting index at 0
+    //set the best var and bestIndex var to j and i respectively if the j node
+    //has lower f value then the current best node.
+    if (nodes[j].f < nodes[best].f)
+    {
+      best = j;
+      bestIndex = i;
+    }
+  }
+
+  //debug
+  Serial.print("Find F : (");
+  Serial.print(nodes[best].r);
+  Serial.print(", ");
+  Serial.print(nodes[best].c);
+  Serial.print(")  f=");
+  Serial.println(nodes[best].f);
+  delay(100);
+  //
+
+  //loop through all list of open nodes starting at the index of the best node
+  //and replace the node at the current index with the one ahead of it,
+  //removing it from the list of open nodes
+  for (int i = bestIndex; i < openCount - 1; i++)
+  {
+    openArray[i] = openArray[i+1];
+  }
+
+  openCount--;
+  nodes[best].open = false;
+  return best;
+}
+
+//this function is used at the end once the goal cell has been found. the parent
+//parameter of each node is used to create the path from the start of the maze
+//to the end goal, connecting all the nodes together.
+int finalPath(int goal, int r_path[], int c_path[])
+{
+  int temp_r[MAX_NODES];
+  int temp_c[MAX_NODES];
+  int length = 0;
+  int current = goal;
+
+  while (current != -1)
+  {
+    //debug
+    Serial.print("Step ");
+    Serial.print(length);
+    Serial.print(": (");
+    Serial.print(nodes[current].r);
+    Serial.print(", ");
+    Serial.print(nodes[current].c);
+    Serial.println(")");
+    delay(100);
+    //
+    temp_r[length] = nodes[current].r;
+    temp_c[length] = nodes[current].c;
+    length++;
+    current = nodes[current].parent;
+  }
+
+  for (int i = 0; i < length; i++)
+  {
+    r_path[i] = temp_r[length-1-i];
+    c_path[i] = temp_c[length-1-i];
+  } 
+  return length;
+}
+
+//main section of the A star algorithm
+//takes in a start row, start column, a goal row, a goal column
+//an array of row positions and and array of column positions
+int astarCode (int row_s, int col_s,int row_g,int col_g, int r_path[], int c_path[])
+{
+
+  //initialize maze, nodes with their respective locations, default (g,h,f),
+  //parent, open, closed values.
+  for (int r =0; r < ROWS; r++)
+  {
+    for (int c = 0; c < COLS; c++)
+    {
+      int i = arrayIndex(r,c);
+      nodes[i].r = r;
+      nodes[i].c = c;
+      nodes[i].g = 1000000;
+      nodes[i].h = heuristic(r,c,row_g,col_g);
+      nodes[i].f = 1000000;
+      nodes[i].parent = -1;
+      nodes[i].open = false;
+      nodes[i].closed = false;
+    }
+  }
+  //setup open count and the starting node where the mouse begins in the maze
+  openCount = 0;
+  int startIndex = arrayIndex(row_s, col_s);
+  int goalIndex = arrayIndex(row_g, col_g);
+  nodes[startIndex].g = 0;
+  nodes[startIndex].f = nodes[startIndex].h;
+  addOpens(startIndex);
+
+  //used to check the location of the next node to evaluate in the code below
+  const int direction_r[4] = {-1,0,1,0};
+  const int direction_c[4] = {0,1,0,-1};
+
+  //run loop as long as open count is not zero
+  while (openCount > 0)
+  {
+    //find node with lowest f value
+    int current = findLowestF();
+    //break if no path can be found
+    if(current < 0)
+    {
+      break;
+    }
+
+    if(nodes[current].closed)
+      continue;
+    nodes[current].closed = true;
+    
+    //check if the current node is the goal node.
+    //if so build the final path
+    if(current == goalIndex)
+    {
+      return finalPath(goalIndex, r_path, c_path);
+    }
+
+    //take the current node and loop through all neighbors
+    //check if robot can move to any of the neighbors
+    int current_r = nodes[current].r;
+    int current_c = nodes[current].c;
+    for(int j = 0; j < 4; j++)
+    {
+      int next_r = current_r + direction_r[j];
+      int next_c = current_c + direction_c[j];
+
+      //move to the next iteration of the loop if the robot can move to the
+      //current node being checked and is within the bounds of the maze
+      if(!canContinue(next_r, next_c))
+      {
+        continue;
+      }
+
+      //set up neighbor var of the current node
+      //check to see if the neighbor has been set to closed, if not
+      //move to the next iteration of the loop
+      int neighbor = arrayIndex(next_r, next_c);
+      if(nodes[neighbor].closed)
+      {
+        continue;
+      }
+
+      //set up potential new cost of the neighbor node
+      //if the neighbor node is not in the open array, set parent of the 
+      //neighbor node as the current node the robot is at, set the cost to go
+      //as the potential new cost and set the f value equal to the potential cost
+      //plus the heuristic of the neighbor node, add the neighbor node to open array
+      //else
+      //if the cost to go of the neighbor node is greater than the potential new 
+      //cost, this (already seen) neighbor node must be updated similar to the previous
+      //if statement before since this node may have a lower cost to go
+      int tentativeG = nodes[current].g+1;
+
+      //debug
+      Serial.print("Check nieghbor: (");
+      Serial.print(next_r);
+      Serial.print(", ");
+      Serial.print(next_c);
+      Serial.print(") tentativeG=");
+      Serial.print(tentativeG);
+      Serial.print(" oldG=");
+      Serial.println(nodes[neighbor].g);
+      delay(100);
+      //
+
+      //check if the neighbor is not in open array and not a closed node, then the 
+      //node is added to opens array as a new node
+      if(!nodes[neighbor].open && !nodes[neighbor].closed)
+      {
+        //debug
+        Serial.println("New node...adding to open list");
+        delay(100);
+        //
+        nodes[neighbor].parent = current;
+        nodes[neighbor].g = tentativeG;
+        nodes[neighbor].f = tentativeG + nodes[neighbor].h;
+        addOpens(neighbor);
+      }
+      else if (tentativeG < nodes[neighbor].g)
+      {
+        //debug
+        Serial.println("Found better path...updating costs");
+        delay(100);
+        //
+        nodes[neighbor].parent = current;
+        nodes[neighbor].g = tentativeG;
+        nodes[neighbor].f = tentativeG + nodes[neighbor].h;
+
+      }
+    }
+  }
+  //return 0 if no path is found
+  return 0;
+  
+}
+
+//takes a given node row and column and provides information about the 
+//nodes around it depening in which direction the robot is facing.
+void sensorMapUpdate(int r, int c)
+{
+  //debug
+  Serial.print("Sensor update at (");
+  Serial.print(r);
+  Serial.print(", ");
+  Serial.print(c);
+  Serial.println(")");
+  delay(100);
+  //
+
+  int front_r = r;
+  int front_c = c;
+  int left_r = r;
+  int left_c = c;
+  int right_r = r;
+  int right_c = c;
+
+  if (heading == 0) front_r--;
+  if (heading == 2) front_r++;
+  if (heading == 1) front_c++;
+  if (heading == 3) front_c--;
+
+  if (heading == 0) left_c--;
+  if (heading == 1) left_r--;
+  if (heading == 2) left_c++;
+  if (heading == 3) left_r++;
+
+  if (heading == 0) right_c++;
+  if (heading == 1) right_r++;
+  if (heading == 2) right_c--;
+  if (heading == 3) right_r--;
+
+  if(bounds(front_r,front_c))
+    if(wallFront())
+      maze[front_r][front_c] = 2; //there is a wall
+    else
+      maze[front_r][front_c] = 1; //open cell
+
+  if(bounds(left_r,left_c))
+    if(wallLeft())
+      maze[left_r][left_c] = 2; //there is a wall
+    else
+      maze[left_r][left_c] = 1; //open cell
+
+  if(bounds(right_r,right_c))
+    if(wallRight())
+      maze[right_r][right_c] = 2; //there is a wall
+    else
+      maze[right_r][right_c] = 1; //open cell
+
+  Serial.print("Front: ");
+  if (wallFront())
+    Serial.println("WALL");
+  else
+    Serial.println("FREE");
+
+  Serial.print("Left : ");
+  if (wallLeft())
+    Serial.println("WALL");
+  else
+    Serial.println("FREE");
+
+  Serial.print("Right: ");
+  if (wallRight())
+    Serial.println("WALL");
+  else
+    Serial.println("FREE");
+  
+  maze[r][c] = 1; //can move using the current cell
+}
+
+//this function allows the robot to take two arrays that have the row and column
+//values needed to check where the robot will go dependent on its heading.
+//this also sets updates the heading and the final position that the robot will 
+//take once it has made its movements
+bool traverse(int r_path[], int c_path[], int length_path, int &r_final, int &c_final)
+{
+  r_final = r_path[0];
+  c_final = c_path[0];
+
+  for(int i = 0; i < length_path - 1; i++)
+  {
+    int r1 = r_path[i];
+    int r2 = r_path[i+1];
+
+    int c1 = c_path[i];
+    int c2 = c_path[i+1];
+
+    //check if the nexted checked cell is blocked by a wall and stop robot from moving
+    if (maze[r2][c2] == 2)
+    {
+      stopMove();
+      return false;
+    }
+    //north = 0, east = 1, south = 2, west = 3
+    int gotoHeading = 0;
+    if(r2 == r1 -1)
+      gotoHeading = 0; //go north
+    else if (r2 == r1 + 1)
+      gotoHeading = 2; //go south
+    else if (c2 == c1 + 1)
+      gotoHeading = 1; //go east
+    else
+      gotoHeading = 3; //go west
+    
+    //debug
+    Serial.print("Follow step: (");
+    Serial.print(r1);
+    Serial.print(", ");
+    Serial.print(c1);
+    Serial.print(") -> (");
+    Serial.print(r2);
+    Serial.print(", ");
+    Serial.print(c2);
+    Serial.println(")");
+
+    Serial.print("Current heading: ");
+    Serial.print(heading);
+    Serial.print("Desired: ");
+    Serial.println(gotoHeading);
+    delay(100);
+    //
+    int turning = gotoHeading - heading;
+    if (turning == 1 || turning == -3)
+    {
+      rightTurn();
+      delay(265);
+      stopMove();
+      delay(500);
+    }
+    else if (turning == -1 || turning == 3)
+    {
+      leftTurn();
+      delay(265);
+      stopMove();
+      delay(500);
+    }
+    else if (abs(turning) == 2)
+    {
+      halfSpin();
+      delay(620);
+      stopMove();
+      delay(500);
+    }
+
+    heading = gotoHeading;
+
+    straighten();
+    delay(30);
+    forward();
+    delay(770);
+    straighten();
+    delay(30);
+    stopMove();
+    delay(50);
+
+    r_final = r2;
+    c_final = c2;
+    //make updates to the map with sensors
+    sensorMapUpdate(r2, c2);
+  }
+  return true;
+}
+
+void setup() {
+  // put your setup code here, to run once:
+  //setup digital pins to control sensors and motors
+  pinMode(2, OUTPUT); //enable pin for left motor
+  pinMode(3, OUTPUT); //logic pin1 for left motor
+  pinMode(4, OUTPUT); //logic pin2 for left motor
+  pinMode(5, OUTPUT); //enable pin for right motor
+  pinMode(6, OUTPUT); //logic pin3 for right motor
+  pinMode(7, OUTPUT); //logic pin4 for right motor
+  pinMode(8, INPUT); //left sensor, 10cm
+  pinMode(9, INPUT); //left sensor, 5cm
+  pinMode(10, INPUT); //front sensor, 10cm
+  pinMode(11, INPUT); //right sensor, 10cm
+  pinMode(12, INPUT); //right sensor, 5cm
+
+  Serial.begin(115200);
+
+  //create maze with all cells as walls
+  for (int r=0; r<ROWS; r++)
+    for (int c=0; c<COLS; c++)
+      maze[r][c] = 0;
+
+  // set known starting cell as free
+  maze[start_row][start_col] = 1;
+
+  delay(2000);
+  Serial.println("Starting maze goal search");
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  static int current_r = start_row;
+  static int current_c = start_col;
+
+  int r_new;
+  int c_new;
+
+  //update maze map
+  sensorMapUpdate(current_r, current_c);
+  
+  //debug
+  Serial.print("RUNNING A* from (");
+  Serial.print(current_r);
+  Serial.print(", ");
+  Serial.print(current_c);
+  Serial.println(")");
+  delay(100);
+  //
+
+  //run the a star algorithm for next best node
+  int r_path[MAX_NODES];
+  int c_path[MAX_NODES];
+  int length_path = astarCode(current_r, current_c, end_row, end_col, r_path, c_path);
+
+  //debug
+  Serial.print("Path length = ");
+  Serial.println(length_path);
+  delay(100);
+  //
+
+  //this section will allow for the robot to move to unknown nodes that have
+  //been discovered by the robot if the A* is unable to produce a path
+  if (length_path == 0)
+  {
+    int r_explore, c_explore;
+
+    if (exploreNeighbor(current_r, current_c, r_explore, c_explore))
+    {
+      int r_path[2] = {current_r, r_explore};
+      int c_path[2] = {current_c, c_explore};
+
+      traverse(r_path, c_path, 2, current_r, current_c);
+    }
+    else
+    {
+      Serial.println("No unknown neighbors...waiting");
+    }
+    return;
+  }
+
+
+  //move robot approriately based on the path being created
+  bool moved = traverse(r_path, c_path, length_path, r_new, c_new);
+
+  //if robot is in goal cell, make the robot just idle
+  if(current_r == end_row && current_c == end_col)
+  {
+    Serial.println("Goal found, you may rest now");
+    while(1)
+    {}
+  }
+  
+  //assign new position to the last movement made by the traverse function
+  current_r = r_new;
+  current_c = c_new;
+
+  delay(100);
+}
+
